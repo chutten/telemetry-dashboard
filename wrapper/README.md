@@ -17,6 +17,7 @@ Where `params` is:
 * `useSubmissionDate` - A boolean as per Telemetry.getEvolution (default: `false`)
 * `sanitize` - A boolean as per someEvolutionInstance.sanitized() (default: `true`)
 * `trim` - A boolean dictating whether or not you want your histograms to have data under 0.0001% ignored from both ends of your data (default: `true`)
+* `logY` - A boolean controlling whether to display the y-axis on a logarithmic scale (default: `false`)
 * `compare` - A string filter name over which we will enumerate all values and plot on the same graph so you can compare the histograms (default: `undefined`)
 * `sensibleCompare` - A boolean dictating whether or not you want to reduce the compared values to just the ones that you are likely to care about (default: `true`)
 * `keyLimit` - a positive integer limiting the number of a keyed measure's measures to be plotted, ordered by number of submissions (default: `4`)

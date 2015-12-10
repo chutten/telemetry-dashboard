@@ -14,6 +14,7 @@ window.TelemetryWrapper = window.TelemetryWrapper || {};
  *  - useSubmissionDate as per Telemetry.getEvolution
  *  - sanitize:bool - operate on sanitized data? (see someEvolutionInstance.sanitized())
  *  - trim:bool for whether or not to trim buckets with insufficient data
+ *  - logY:bool for whether or not to display the Y axis in a logarithmic scale
  *  - compare - a filter name over which we'll enumerate the values and graph
  *  - sensibleCompare - default true. Sensibly only compare a subset of values instead of trying to graph them all
  *  - keyLimit - a positive integer limiting the number of keyed histograms' data to show, sorted by number of data submissions, default 4
@@ -239,7 +240,7 @@ window.TelemetryWrapper.go = function (params, element) {
           // but no one'd see them but us.
           return {
             date: i,
-            value: count / hist.count * 100
+            value: params.logY ? Math.log10(count / hist.count * 100) : count / hist.count * 100
           };
         }));
 
@@ -263,6 +264,7 @@ window.TelemetryWrapper.go = function (params, element) {
           // After all this generality about how much data we're dealing with,
           // it turns out that it's just a single histogram after all. Yeesh.
           drawAsHistogram(
+            params,
             graphEl,
             starts,
             ends,
@@ -271,6 +273,7 @@ window.TelemetryWrapper.go = function (params, element) {
             trimLeft);
         } else {
           drawAsLines(
+            params,
             graphEl,
             starts,
             ends,
@@ -334,7 +337,7 @@ window.TelemetryWrapper.go = function (params, element) {
     });
   }
 
-  function drawAsLines(graphEl, starts, ends, datas, hists, trimLeft) {
+  function drawAsLines(params, graphEl, starts, ends, datas, hists, trimLeft) {
     // taken from dist.js. Why do we have to do this?
     // maybe so the line is in the middle of the buckets?
     datas.forEach(data => data.forEach(datum => datum.date += 0.5));
@@ -364,7 +367,12 @@ window.TelemetryWrapper.go = function (params, element) {
         }
         return formatNumber(starts[index % starts.length]);
       },
-      yax_format: value => value + '%',
+      yax_format: value => {
+        if (params.logY) {
+          value = Math.pow(10, value);
+        }
+        return value + '%';
+      },
       mouseover: (datum, index) => {
         index += trimLeft;
 
@@ -390,7 +398,8 @@ window.TelemetryWrapper.go = function (params, element) {
         legend.appendChild(bucketLabelEl);
 
         hists.forEach((hist, i) => {
-          var lineLabel = hist.compareLabel + ' ' + Math.round(datum.values[i].value * 100) / 100 + '%';
+          var yValue = params.logY ? Math.pow(10, datum.values[i].value) : datum.values[i].value;
+          var lineLabel = hist.compareLabel + ' ' + Math.round(yValue * 100) / 100 + '%';
           var lineLabelCircle = document.createElement('span');
           lineLabelCircle.className = 'mg-line' + datum.values[i].line_id + '-legend-color graph-legend-circle';
           lineLabelCircle.textContent = '\u25CF';
@@ -406,7 +415,7 @@ window.TelemetryWrapper.go = function (params, element) {
     });
   }
 
-  function drawAsHistogram(graphEl, starts, ends, data, hist, trimLeft) {
+  function drawAsHistogram(params, graphEl, starts, ends, data, hist, trimLeft) {
     MG.data_graphic({
       data: data,
       binned: true,
@@ -431,7 +440,12 @@ window.TelemetryWrapper.go = function (params, element) {
         }
         return formatNumber(starts[index]);
       },
-      yax_format: value => value + '%',
+      yax_format: value => {
+        if (params.logY) {
+          value = Math.pow(10, value);
+        }
+        return value + '%';
+      },
       mouseover: (datum, index) => {
         index += trimLeft;
 
@@ -450,7 +464,8 @@ window.TelemetryWrapper.go = function (params, element) {
         }
 
         var count = formatNumber(hist.values[datum.x]);
-        var percentage = Math.round(datum.y * 100) / 100 + '%';
+        var yValue = params.logY ? Math.pow(10, datum.y) : datum.y;
+        var percentage = Math.round(yValue * 100) / 100 + '%';
 
         var samplesLabel = count + ' samples (' + percentage + ')';
 
@@ -678,6 +693,7 @@ window.TelemetryWrapper.go = function (params, element) {
     params.useSubmissionDate = params.useSubmissionDate || false;
     params.sanitize = params.sanitize != 'false';
     params.trim = params.trim != 'false';
+    params.logY = params.logY; // default undefined
     params.compare = params.compare; // default undefined
     if (params.compare && params.filters[params.compare]) {
       // If we're filtering to a particular value, we can't then compare by it.

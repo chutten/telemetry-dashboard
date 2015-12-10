@@ -80,6 +80,7 @@ window.addEventListener('load', function () {
       trim: $('#trim').checked,
       compare: $('#compare').selectedOptions[0].value,
       sensibleCompare: $('#sensible-compare').checked,
+      logY: $('#log-y').checked,
       evoVersions: $('#evo-radio').checked ? $('#evo-versions').value : 0,
       filters: undefined,
     };
@@ -259,6 +260,7 @@ window.addEventListener('load', function () {
           trim: params['trim'][i],
           compare: params['compare'][i],
           sensibleCompare: params['sensibleCompare'][i],
+          logY: params['logY'][i],
           evoVersions: params['evoVersions'][i],
           filters: params['filters'][i] ? JSON.parse(params['filters'][i]) : '',
         };
@@ -277,6 +279,7 @@ window.addEventListener('load', function () {
     var trims = [];
     var compares = [];
     var sensibleCompares = [];
+    var logYs = [];
     var evoVersionses = [];
     var filterses = [];
     _dash.forEach(plot => {
@@ -288,6 +291,7 @@ window.addEventListener('load', function () {
       trims.push(plot.trim || false);
       compares.push(plot.compare || '');
       sensibleCompares.push(plot.sensibleCompare || false);
+      logYs.push(plot.logY || false);
       evoVersionses.push(plot.evoVersions || 0);
       filterses.push(plot.filters ? JSON.stringify(plot.filters) : '');
     });
@@ -297,6 +301,7 @@ window.addEventListener('load', function () {
       `&metric=${metrics.join(';')}&useSubmissionDate=${useSubmissionDates.join(';')}` +
       `&sanitize=${sanitizes.join(';')}&trim=${trims.join(';')}` +
       `&compare=${compares.join(';')}&sensibleCompare=${sensibleCompares.join(';')}` +
+      `&logY=${logYs.join(';')}` +
       `&evoVersions=${evoVersionses.join(';')}&filters=${filterses.join(';')}`;
 
     if (!window.location.search) {
