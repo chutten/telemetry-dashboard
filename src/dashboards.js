@@ -163,8 +163,8 @@ $(document)
               .find("input")
               .show()
               .val(shortUrl)
-              .focus()
-              .document.execCommand('copy');
+              .focus();
+               document.execCommand('copy');
           }
         });
       });
