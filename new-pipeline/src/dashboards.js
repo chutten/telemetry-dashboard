@@ -127,51 +127,49 @@ $(document)
       });
 
     // Permalink control
-    $(".permalink-control")
-      .append(
-        '<div class="input-group">' +
-        '    <span class="input-group-btn"><button type="button" class="btn btn-default" title="Get Permalink"><span class="glyphicon glyphicon-link"></span></button></span>' +
-        '    <input type="text" class="form-control">' +
-        '</div>'
-      );
-    $(".permalink-control input")
-      .hide()
-      .focus(function () {
-        // Workaround for broken selection: http://stackoverflow.com/questions/5797539
-        var $this = $(this);
-        $this.select()
-          .mouseup(function () {
-            $this.unbind("mouseup");
-            return false;
-          });
-      });
-    $(".permalink-control button")
-      .click(function () {
-        var $this = $(this);
-        $.ajax({
-          url: "https://api-ssl.bitly.com/shorten",
-          dataType: "jsonp",
-          data: {
-            longUrl: window.location.href,
-            access_token: "48ecf90304d70f30729abe82dfea1dd8a11c4584",
-            format: "json"
-          },
-          success: function (response) {
-            var longUrl = Object.keys(response.results)[0];
-            var shortUrl = response.results[longUrl].shortUrl;
-            if (shortUrl.indexOf(":") === 4) {
-              shortUrl = "https" + shortUrl.substring(4);
-            }
-            $this.parents(".permalink-control")
-              .find("input")
-              .show()
-              .val(shortUrl)
-              .focus();
-            document.execCommand('copy');
-          }
-        });
-      });
+   $(".permalink-control")
+  .append(
+    '<div class="input-group">' +
+    '    <span class="input-group-btn"><button type="button" disabled class="btn btn-default" title="Get Permalink"><span class="glyphicon glyphicon-link"></span></button></span>' +
+    '    <input type="text" class="form-control">' +
+    '</div>'
+  );
+
+var shortUrl,
+  input = $(".permalink-control input"),
+  trigger = $(".permalink-control button"),
+  getIt = function() {
+    $.ajax({
+      url: "https://api-ssl.bitly.com/shorten",
+      dataType: "jsonp",
+      data: {
+        longUrl: window.location.href,
+        access_token: "48ecf90304d70f30729abe82dfea1dd8a11c4584",
+        format: "json"
+      },
+      success: function(response) {
+        var longUrl = Object.keys(response.results)[0];
+        shortUrl = response.results[longUrl].shortUrl;
+        if (shortUrl.indexOf(":") === 4) {
+          shortUrl = "https" + shortUrl.substring(4);
+        }
+        input.val(shortUrl);
+        trigger.attr('disabled', false);
+      }
+    })
+  };
+getIt();
+input.hide().focus(function() {
+  input.select();
+  document.execCommand('copy');
+  input.mouseup(function() {
+    input.unbind("mouseup");
+    return false;
   });
+});
+trigger.click(function() {
+  input.show().focus();
+});
 
 // Load the current state from the URL, or the cookie if the URL is not specified
 function loadStateFromUrlAndCookie() {
