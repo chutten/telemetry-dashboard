@@ -169,7 +169,7 @@ $(document)
           },
           async:false
         });
-      document.execCommand('copy');
+        document.execCommand('copy');
       });
   });
 
