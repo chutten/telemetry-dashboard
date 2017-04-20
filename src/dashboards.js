@@ -164,7 +164,6 @@ $(document)
               .show()
               .val(shortUrl)
               .focus();
-            document.execCommand('copy');
           }
         });
       });
