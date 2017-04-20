@@ -157,7 +157,10 @@ $(document)
             format: "json"
           },
           success: function (response) {
-            var shortUrl = response.data.shortUrl;
+            var shortUrl = response.data.url;
+            if (shortUrl.indexOf(":") === 4) {
+              shortUrl = "https" + shortUrl.substring(4);
+            }
             $this.parents(".permalink-control")
               .find("input")
               .show()
@@ -166,7 +169,7 @@ $(document)
           },
           async:false
         });
-        document.execCommand('copy');
+      document.execCommand('copy');
       });
   });
 
@@ -183,7 +186,7 @@ function loadStateFromUrlAndCookie() {
   var pageState = {};
 
   // Load from cookie if URL does not have state
-  if (url.indexOf("max_channel_version=") < 0) {
+  if (url.indexOf("measure=") < 0) {
     var name = "stateFromUrl=";
     document.cookie.split(";")
       .forEach(function (entry) {
@@ -193,7 +196,7 @@ function loadStateFromUrlAndCookie() {
         }
       });
   }
-  if (url.indexOf("max_channel_version=") < 0) { // No state or invalid/corrupted state, restore to default settings
+  if (url.indexOf("measure=") < 0) { // No state or invalid/corrupted state, restore to default settings
     pageState.aggregates = ["median"];
     pageState.measure = ["GC_MS"];
     pageState.min_channel_version = null;
@@ -201,10 +204,14 @@ function loadStateFromUrlAndCookie() {
     pageState.product = ["Firefox"];
     pageState.os = pageState.arch = pageState.e10s = pageState.processType =
       null;
+    pageState.compare = "";
+    pageState.keys = [];
     pageState.use_submission_date = 0;
     pageState.sanitize = 1;
+    pageState.sort_keys = "submissions";
     pageState.table = 0;
     pageState.cumulative = 0;
+    pageState.trim = 1;
     pageState.start_date = pageState.end_date = null;
     return pageState;
   }
@@ -222,7 +229,8 @@ function loadStateFromUrlAndCookie() {
     var aggregates = pageState.aggregates.split("!")
       .filter(function (v) {
         return ["5th-percentile", "25th-percentile", "median",
-          "75th-percentile", "95th-percentile", "mean"].indexOf(v) >= 0;
+            "75th-percentile", "95th-percentile", "mean"].indexOf(v) >= 0 ||
+          v.startsWith("bucket-");
       });
     if (aggregates.length > 0) {
       pageState.aggregates = aggregates;
@@ -270,12 +278,35 @@ function loadStateFromUrlAndCookie() {
     .filter(function (v) {
       return v !== "";
     }) : null;
+  pageState.compare = typeof pageState.compare === "string" && ["", "os",
+      "osVersion", "architecture", "e10sEnabled", "child"].indexOf(pageState.compare) >=
+    0 ?
+    pageState.compare : "";
+
+  pageState.keys = typeof pageState.keys === "string" ? pageState.keys.split(
+    "!") : [];
+
+  // versions are on two different channels, change the min version to be the smallest version in the max version's channel
+  if (pageState.min_channel_version !== null && pageState.max_channel_version !==
+    null && pageState.min_channel_version.split("/")[0] !== pageState.max_channel_version
+    .split("/")[0]) { // Two versions are on different channels, move the other one into the right channel
+    var channel = pageState.max_channel_version.split("/")[0];
+    var channelVersions = Telemetry.getVersions()
+      .filter(function (version) {
+        return version.startsWith(channel + "/") && version <= pageState.max_channel_version;
+      });
+    pageState.min_channel_version = channelVersions[Math.max(0, channelVersions
+      .length - 4)];
+  }
 
   pageState.use_submission_date = pageState.use_submission_date === "0" ||
     pageState.use_submission_date === "1" ? parseInt(pageState.use_submission_date) :
     0;
   pageState.sanitize = pageState.sanitize === "0" || pageState.sanitize === "1" ?
     parseInt(pageState.sanitize) : 1;
+  pageState.sort_keys = ["submissions", "5th-percentile", "25th-percentile",
+    "median", "75th-percentile", "95th-percentile", "mean"].indexOf(pageState
+    .sort_keys) >= 0 ? pageState.sort_keys : "submissions";
   pageState.table = pageState.table === "0" || pageState.table === "1" ?
     parseInt(pageState.table) : 0;
   pageState.cumulative = pageState.cumulative === "0" || pageState.cumulative ===
@@ -290,9 +321,106 @@ function loadStateFromUrlAndCookie() {
   return pageState;
 }
 
-// A whole bucketful of dirty hacks in this function to clean up options and give them nice names
-function getHumanReadableOptions(filterName, options, os) {
-  os = os || null;
+// Generate a map of arrays of individual filter sets that, when the resulting histograms are added together, results in the same histogram as if all the filter options were selected
+function getFilterSetsMapping(filters, comparisonName) {
+  comparisonName = comparisonName || null;
+
+  // Obtain a mapping from filter names to filter options
+  var filterMapping = {};
+  for (var filterName in filters) {
+    var selector = filters[filterName];
+    var selected = selector.val() || [];
+    if (selected.length !== selector.find("option")
+      .length) { // Some options are not selected, so we need to explicitly filter
+      if (filterName === "os") {
+        selected = compressOSs();
+      }
+      if (filterName !== comparisonName) { // avoid filtering by the comparison name
+        filterMapping[filterName] = selected;
+      }
+    }
+  }
+
+  function copy(obj) {
+    var result = {};
+    for (var key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        result[key] = obj[key];
+      }
+    }
+    return result;
+  }
+
+  function getFilterSets(filterMapping) {
+    var filterSets = [{}];
+    for (var filterName in filterMapping) {
+      filterSets = [].concat.apply([], filterMapping[filterName].map(function (
+        filterValue) {
+        return filterSets.map(function (filterSet) {
+          var newFilterSet = copy(filterSet);
+          if (filterName === "os") {
+            if (filterValue.indexOf(",") >= 0) { // we have an OS value like "Windows_NT,6.1", and we want to set the os filter to Windows_NT and the osVersion filter to 6.1
+              var parts = filterValue.split(",");
+              newFilterSet["os"] = parts[0];
+              newFilterSet["osVersion"] = parts[1];
+            } else { // we have an OS value like "Windows_NT" (all versions of Windows), just set the os filter, not the osVersion filter
+              newFilterSet["os"] = filterValue;
+            }
+          } else {
+            newFilterSet[filterName] = filterValue;
+          }
+          return newFilterSet;
+        });
+      }));
+    }
+    return filterSets;
+  }
+
+  // Add a new filter set collection for each comparison option, or just one if not comparing
+  var filterSetsMapping = {};
+  if (comparisonName === null) {
+    filterSetsMapping["*"] = getFilterSets(filterMapping);
+  } else {
+    var comparisonValues; // List of options, each of which needs an entry to compare by
+    switch (comparisonName) {
+    case "os":
+      comparisonValues = compressOSs();
+      break;
+    case "osVersion":
+      comparisonValues = filters["os"].val() || [];
+      break;
+    default:
+      comparisonValues = filters[comparisonName].val() || [];
+      break;
+    }
+    comparisonValues.forEach(function (comparisonValue) {
+      filterSetsMapping[comparisonValue] = getFilterSets(filterMapping)
+        .map(function (filterSet) {
+          if (comparisonName === "os" || comparisonName === "osVersion") {
+            if (comparisonValue.indexOf(",") >= 0) { // we have an OS value like "Windows_NT,6.1", and we want to set the os filter to Windows_NT and the osVersion filter to 6.1
+              var parts = comparisonValue.split(",");
+              filterSet["os"] = parts[0];
+              filterSet["osVersion"] = parts[1];
+            } else { // we have an OS value like "Windows_NT" (all versions of Windows), just set the os filter, not the osVersion filter
+              filterSet["os"] = comparisonValue;
+            }
+          } else {
+            filterSet[comparisonName] = comparisonValue;
+          }
+          return filterSet;
+        });
+    });
+  }
+  return filterSetsMapping;
+}
+
+function getHumanReadableOptions(filterName, options) {
+  var channelVersionOrder = {
+    "nightly": 0,
+    "aurora": 1,
+    "beta": 2,
+    "release": 3
+  };
   var productNames = {
     "Firefox": "Firefox Desktop",
     "Fennec": "Firefox Mobile"
@@ -300,22 +428,16 @@ function getHumanReadableOptions(filterName, options, os) {
   var productOrder = {
     "Firefox": 0,
     "Fennec": 1,
-    "Thunderbird": 2
+    "Thunderbird": 2,
+    "B2G": 3
   };
   var systemNames = {
-    "WINNT": "Windows",
+    "Windows_NT": "Windows",
     "Darwin": "OS X"
   };
-  var channelVersionOrder = {
-    "nightly": 0,
-    "aurora": 1,
-    "beta": 2,
-    "release": 3
-  };
-  var ignoredSystems = {
-    "Windows_95": true,
-    "Windows_NT": true,
-    "Windows_98": true
+  var systemOrder = {
+    "Windows_NT": 1,
+    "Darwin": 2
   };
   var windowsVersionNames = {
     "5.0": "2000",
@@ -357,8 +479,18 @@ function getHumanReadableOptions(filterName, options, os) {
     "x86": "32-bit",
     "x86-64": "64-bit"
   };
+  var e10sNames = {
+    "false": "no e10s",
+    "true": "e10s"
+  };
+  var processTypeNames = {
+    "false": "main process",
+    "true": "child process"
+  };
   if (filterName === "application") {
-    return options.sort(function (a, b) {
+    var knownProducts = [],
+      unknownProducts = [];
+    options.sort(function (a, b) {
         // Sort by explicit product order if available
         if (productOrder.hasOwnProperty(a) && productOrder.hasOwnProperty(b)) {
           return productOrder[a] - productOrder[b];
@@ -369,59 +501,106 @@ function getHumanReadableOptions(filterName, options, os) {
         }
         return ((a < b) ? -1 : ((a > b) ? 1 : 0));
       })
-      .map(function (option) {
-        return [option, productNames.hasOwnProperty(option) ? productNames[
-          option] : option];
-      });
-  } else if (filterName === "os") {
-    return options.map(function (option) {
-      return [option, systemNames.hasOwnProperty(option) ? systemNames[
-        option] : option];
-    });
-  } else if (filterName === "osVersion") {
-    var osName = os === null ? "" : (systemNames.hasOwnProperty(os) ?
-      systemNames[os] : os);
-    if (ignoredSystems[os] !== undefined) {
-      return [];
-    } // No versions for ignored OSs
-    if (os === "WINNT") {
-      return options.sort(function (a, b) {
-          // Sort by explicit version order if available
-          if (windowsVersionOrder.hasOwnProperty(a) && windowsVersionOrder.hasOwnProperty(
-              b)) {
-            return windowsVersionOrder[a] - windowsVersionOrder[b];
-          } else if (windowsVersionOrder.hasOwnProperty(a)) {
-            return -1;
-          } else if (windowsVersionOrder.hasOwnProperty(b)) {
-            return 1;
-          }
-          return ((a < b) ? -1 : ((a > b) ? 1 : 0));
-        })
-        .map(function (option) {
-          return [os + "," + option, osName + " " + (windowsVersionNames.hasOwnProperty(
-              option) ? windowsVersionNames[option] : option), "Any " +
-            osName];
-        });
-    } else if (os === "Darwin") {
-      return options.map(function (option) {
-        for (var prefix in darwinVersionPrefixes) {
-          if (option.startsWith(prefix)) {
-            return [os + "," + option, osName + " " + option + " (" +
-              darwinVersionPrefixes[prefix] + ")", "Any " + osName];
-          }
+      .forEach(function (option) {
+        if (productOrder.hasOwnProperty(option)) {
+          knownProducts.push([option, productNames.hasOwnProperty(option) ?
+            productNames[option] : option]);
+        } else {
+          unknownProducts.push([option, productNames.hasOwnProperty(option) ?
+            productNames[option] : option]);
         }
-        return [os + "," + option, osName + " " + option, "Any " + osName];
+      });
+    return knownProducts.concat([null])
+      .concat(unknownProducts);
+  } else if (filterName === "os" || filterName === "osVersion") {
+    var entries = options.map(function (option) {
+      var parts = option.split(",");
+      return {
+        os: parts[0],
+        osName: systemNames.hasOwnProperty(parts[0]) ? systemNames[parts[0]] : parts[
+          0],
+        version: parts.length > 1 ? parts[1] : null,
+        value: option,
+      };
+    });
+
+    var osEntryMapping = {};
+    entries.forEach(function (entry) {
+      if (!osEntryMapping.hasOwnProperty(entry.os)) {
+        osEntryMapping[entry.os] = [];
+      }
+      osEntryMapping[entry.os].push(entry);
+    });
+
+    // Apply custom sort order for Windows
+    if (osEntryMapping.hasOwnProperty("Windows_NT")) {
+      osEntryMapping["Windows_NT"].sort(function (a, b) {
+        // Sort by explicit version order if available
+        if (windowsVersionOrder.hasOwnProperty(a) && windowsVersionOrder.hasOwnProperty(
+            b)) {
+          return windowsVersionOrder[a] - windowsVersionOrder[b];
+        } else if (windowsVersionOrder.hasOwnProperty(a)) {
+          return -1;
+        } else if (windowsVersionOrder.hasOwnProperty(b)) {
+          return 1;
+        }
+        return ((a < b) ? -1 : ((a > b) ? 1 : 0));
       });
     }
-    return options.map(function (option) {
-      return [os + "," + option, osName + " " + option, "Any " + osName];
-    });
-  } else if (filterName === "arch") {
+
+    // Apply custom version names for OS versions, grouped by OS alphabetically
+    var result = [];
+    return [].concat.apply([], Object.keys(osEntryMapping)
+      .sort(function (a, b) {
+        // Sort by explicit version order if available
+        if (systemOrder.hasOwnProperty(a) && systemOrder.hasOwnProperty(b)) {
+          return systemOrder[a] - systemOrder[b];
+        } else if (systemOrder.hasOwnProperty(a)) {
+          return -1;
+        } else if (systemOrder.hasOwnProperty(b)) {
+          return 1;
+        }
+        return ((a < b) ? -1 : ((a > b) ? 1 : 0));
+      })
+      .map(function (os) {
+        var entries = osEntryMapping[os];
+        return entries.map(function (entry) {
+          var versionName = entry.version;
+          if (versionName === null) {
+            return [entry.value, entry.osName, "Any " + entry.osName];
+          }
+          if (entry.os === "Windows_NT") {
+            versionName = windowsVersionNames.hasOwnProperty(entry.version) ?
+              windowsVersionNames[entry.version] : entry.version;
+          } else if (entry.os === "Darwin") {
+            for (var prefix in darwinVersionPrefixes) {
+              if (entry.version.startsWith(prefix)) {
+                versionName = entry.version + " (" +
+                  darwinVersionPrefixes[prefix] + ")";
+              }
+            }
+          }
+          return [entry.value, entry.osName + " " + versionName, "Any " +
+            entry.osName];
+        });
+      }));
+  } else if (filterName === "architecture") {
     return options.map(function (option) {
       return [option, archNames.hasOwnProperty(option) ? archNames[option] :
         option];
     });
+  } else if (filterName === "e10sEnabled") {
+    return options.map(function (option) {
+      return [option, e10sNames.hasOwnProperty(option) ? e10sNames[option] :
+        option];
+    });
+  } else if (filterName === "child") {
+    return options.map(function (option) {
+      return [option, processTypeNames.hasOwnProperty(option) ?
+        processTypeNames[option] : option];
+    });
   } else if (filterName === "measure") {
+    // Add a hidden version of the option with spaces instead of underscores, to be able to search with spaces
     return options.sort()
       .map(function (option) {
         return [option, option]
@@ -530,67 +709,20 @@ function getHumanReadableOptions(filterName, options, os) {
   });
 }
 
-function getOptions(filterList, histogramEvolution) {
-  function getCombinedFilterTree(histogramEvolution) {
-    var fullOptions = histogramEvolution.filterOptions(),
-      filterTree = {};
-    if (histogramEvolution.filterName() == "os") {
-      return filterTree
-    }
-    fullOptions.forEach(function (option) {
-      var filteredEvolution = histogramEvolution.filter(option);
-      filterTree[option] = getCombinedFilterTree(filteredEvolution);
+function getHumanReadableBucketOptions(kind, buckets) {
+  if (kind === "boolean" || kind === "flag") {
+    return buckets.map(function (start) {
+      return [
+        "bucket-" + start,
+        (start === 0 ? "False" : start === 1 ? "True" : "Invalid value") +
+        " percentage"
+      ];
     });
-    filterTree._name = histogramEvolution.filterName();
-    return filterTree
   }
 
-  function getOptionsList(filterTree, optionsList, currentPath, depth) { // Flatten the tree of options horizontally to get the options list at each level
-    var options = Object.keys(filterTree)
-      .sort();
-    var filterOptions = Object.keys(filterTree)
-      .filter(function (option) {
-        return option != "_name";
-      });
-    if (filterOptions.length === 0) {
-      return optionsList;
-    }
-
-    // Add the current options into the option map
-    if (optionsList[depth] === undefined) {
-      optionsList[depth] = [];
-    }
-    var os = null;
-    if (filterTree._name === "osVersion") {
-      os = currentPath[currentPath.length - 1];
-    }
-    var currentOptions = getHumanReadableOptions(filterTree._name,
-      filterOptions, os);
-    optionsList[depth] = optionsList[depth].concat(currentOptions);
-
-    filterOptions.forEach(function (option) {
-      getOptionsList(filterTree[option], optionsList, currentPath.concat([
-        option]), depth + 1);
-    });
-    return optionsList;
-  }
-
-  var filterTree = getCombinedFilterTree(histogramEvolution);
-  var optionsList = getOptionsList(filterTree, [], [], 0);
-
-  // Remove duplicate options
-  optionsList = optionsList.map(function (options) {
-    var result = [],
-      seen = {};
-    options.forEach(function (option) {
-      if (!(option[0] in seen)) {
-        result.push(option);
-        seen[option[0]] = true;
-      }
-    })
-    return result;
-  })
-  return optionsList;
+  return buckets.map(function (start) {
+    return ["bucket-" + start, start + " bucket percentage"];
+  });
 }
 
 function formatNumber(number) {
@@ -624,10 +756,11 @@ function deduplicate(values) {
   });
 }
 
-function multiselectSetSelected(element, options) {
-  element.multiselect("deselectAll", false)
-    .multiselect("select", options)
-    .multiselect("updateButtonText");
+function assert(condition, message) {
+  if (!condition) {
+    throw message === undefined ? "Assertion failed" : message;
+  }
+  return condition;
 }
 
 // Sets the options of a multiselect to a list of pairs where the first element is the value, and the second is the text
@@ -718,8 +851,7 @@ function multiselectSetOptions(element, options, defaultSelected) {
     element.empty()
       .append(options.map(function (option) {
           if (option === null) {
-            return
-              '<option disabled>&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;</option>';
+            return '<option disabled>&nbsp;</option>';
           }
           return '<option value="' + option[0] + '">' + option[1] +
             '</option>';
@@ -830,12 +962,12 @@ function compressOSs() {
         .attr("value");
     })
     .toArray();
-  var optionCounts = {},
-    selectedByOS = {};
+  var optionCounts = {};
   options.forEach(function (option) {
     var os = option.split(",")[0];
-    optionCounts[os] = optionCounts[os] + 1 || 1;
+    optionCounts[os] = (optionCounts[os] || 0) + 1;
   });
+  var selectedByOS = {};
   selected.forEach(function (option) {
     var os = option.split(",")[0];
     if (!selectedByOS.hasOwnProperty(os)) {
